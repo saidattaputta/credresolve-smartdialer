@@ -38,3 +38,10 @@ ALLOWED_CALL_TRANSITIONS = {
         CallState.FAILED,
     },
 }
+
+# Terminal states cannot transition to another state.
+ALLOWED_CALL_TRANSITIONS.update({
+    "COMPLETED": set(),
+    "FAILED": set(),
+    "CANCELLED": set(),
+})
