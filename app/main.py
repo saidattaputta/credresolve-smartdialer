@@ -147,6 +147,7 @@ def dial_campaign(
         payload.answer_rate,
         payload.average_talk_time_seconds,
         payload.max_batch,
+        payload.idempotency_key,
     )
 
 
