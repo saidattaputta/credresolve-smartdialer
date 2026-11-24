@@ -165,6 +165,10 @@ class Dialer:
             call = self.allocator.reserve_one(db, campaign_id, provider_name, key)
             if call is None:
                 break
+            # Persist the boundary before the external side effect. If the worker
+            # dies after this commit, recovery will not blindly retry the provider.
+            call.provider_started = True
+            db.commit()
             result = provider.initiate(call.id, db.get(Borrower, call.borrower_id).phone)
             HEALTH[provider_name].record(result.accepted)
             if result.accepted:
@@ -232,7 +236,11 @@ def recover_stale_reservations(db: Session, stale_after_seconds: int = 120) -> d
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
     stale_calls = db.scalars(
-        select(Call).where(Call.state == "RESERVED", Call.updated_at < cutoff)
+        select(Call).where(
+            Call.state == "RESERVED",
+            Call.provider_started.is_(False),
+            Call.updated_at < cutoff,
+        )
     ).all()
     recovered = 0
     for call in stale_calls:
