@@ -1,5 +1,7 @@
 import math
+from uuid import uuid4
 from sqlalchemy import select, update, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import Agent, Borrower, Call, ProviderEvent
 from app.domain import TERMINAL_CALL_STATES, ALLOWED_CALL_TRANSITIONS
@@ -44,6 +46,10 @@ class Allocator:
         key: str,
         max_attempts: int = 10,
     ):
+        # A repeated client key must never allocate a second call.
+        if db.scalar(select(Call.id).where(Call.idempotency_key == key)) is not None:
+            return None
+
         for attempt in range(max_attempts):
 
             # Find an available agent.
@@ -110,14 +116,16 @@ class Allocator:
             )
 
             db.add(call)
-            db.flush()
-
-            agent.current_call_id = call.id
-
-            db.commit()
-            db.refresh(call)
-
-            return call
+            try:
+                db.flush()
+                agent.current_call_id = call.id
+                db.commit()
+                db.refresh(call)
+                return call
+            except IntegrityError:
+                # Another worker may have won the unique idempotency-key race.
+                db.rollback()
+                return None
 
         # No successful reservation within the retry limit.
         return None
@@ -130,7 +138,8 @@ class Dialer:
         self.allocator = Allocator()
 
     def dial(self, db: Session, campaign_id: int, mode: str, provider_name: str,
-             answer_rate: float = 0.5, avg_talk: int = 120, max_batch: int = 50):
+             answer_rate: float = 0.5, avg_talk: int = 120, max_batch: int = 50,
+             idempotency_key: str | None = None):
         available = db.scalar(select(func.count()).select_from(Agent).where(Agent.state == "AVAILABLE")) or 0
         queued = db.scalar(select(func.count()).select_from(Borrower).where(
             Borrower.campaign_id == campaign_id, Borrower.state == "QUEUED")) or 0
@@ -148,10 +157,11 @@ class Dialer:
         approved = decision.approved_count
         reason = decision.reason
         created = []
+        batch_key = idempotency_key or uuid4().hex
         provider = PROVIDERS[provider_name]
         for i in range(approved):
             # Stable per-batch key prevents duplicate requests from creating duplicate calls.
-            key = f"campaign-{campaign_id}-{mode}-{db.query(func.count(Call.id)).scalar()}-{i}"
+            key = f"campaign-{campaign_id}-{batch_key}-{i}"
             call = self.allocator.reserve_one(db, campaign_id, provider_name, key)
             if call is None:
                 break
@@ -170,6 +180,7 @@ class Dialer:
             created.append(call.id)
         return {
             "mode": mode, "requested": requested, "approved": approved,
+            "idempotency_key": batch_key,
             "initiated_call_ids": created, "safety_decision": reason,
             "pacing_explanation": explanation, "provider_healthy": HEALTH[provider_name].healthy()
         }
