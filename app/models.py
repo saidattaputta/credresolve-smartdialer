@@ -1,55 +1,125 @@
 from datetime import datetime, timezone
-from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, Boolean, UniqueConstraint, Text
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
+from sqlalchemy.orm import Mapped, mapped_column
+
 from app.db import Base
 
-def utcnow():
+
+def utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
 
 class Campaign(Base):
     __tablename__ = "campaigns"
+
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
+
 
 class Agent(Base):
     __tablename__ = "agents"
+
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    state: Mapped[str] = mapped_column(String(20), default="AVAILABLE", index=True)
-    current_call_id: Mapped[int | None] = mapped_column(ForeignKey("calls.id"), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    state: Mapped[str] = mapped_column(
+        String(20),
+        default="AVAILABLE",
+        index=True,
+    )
+    current_call_id: Mapped[int | None] = mapped_column(
+        ForeignKey("calls.id"),
+        nullable=True,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
 
 class Borrower(Base):
     __tablename__ = "borrowers"
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("campaigns.id"),
+        index=True,
+    )
     name: Mapped[str] = mapped_column(String(120))
     phone: Mapped[str] = mapped_column(String(30))
-    state: Mapped[str] = mapped_column(String(20), default="QUEUED", index=True)
+    state: Mapped[str] = mapped_column(
+        String(20),
+        default="QUEUED",
+        index=True,
+    )
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+
 
 class Call(Base):
     __tablename__ = "calls"
+
     id: Mapped[int] = mapped_column(primary_key=True)
-    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id"), index=True)
+    campaign_id: Mapped[int] = mapped_column(
+        ForeignKey("campaigns.id"),
+        index=True,
+    )
     agent_id: Mapped[int] = mapped_column(ForeignKey("agents.id"), index=True)
-    borrower_id: Mapped[int] = mapped_column(ForeignKey("borrowers.id"), index=True)
+    borrower_id: Mapped[int] = mapped_column(
+        ForeignKey("borrowers.id"),
+        index=True,
+    )
     provider: Mapped[str] = mapped_column(String(40))
-    provider_call_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    state: Mapped[str] = mapped_column(String(20), default="RESERVED", index=True)
+    provider_call_id: Mapped[str | None] = mapped_column(
+        String(120),
+        nullable=True,
+    )
+    state: Mapped[str] = mapped_column(
+        String(20),
+        default="RESERVED",
+        index=True,
+    )
     idempotency_key: Mapped[str] = mapped_column(String(160), unique=True)
-    provider_started: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    provider_started: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+        onupdate=utcnow,
+    )
+
 
 class ProviderEvent(Base):
     __tablename__ = "provider_events"
+    __table_args__ = (
+        UniqueConstraint("provider", "event_id", name="uq_provider_event"),
+    )
+
     id: Mapped[int] = mapped_column(primary_key=True)
     provider: Mapped[str] = mapped_column(String(40))
     event_id: Mapped[str] = mapped_column(String(160))
     call_id: Mapped[int] = mapped_column(ForeignKey("calls.id"))
     event_type: Mapped[str] = mapped_column(String(30))
-    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-    __table_args__ = (UniqueConstraint("provider", "event_id", name="uq_provider_event"),)
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=utcnow,
+    )
