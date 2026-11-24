@@ -1,149 +1,196 @@
 # CredResolve SmartDialer
 
-A runnable Python prototype for progressive and predictive outbound dialing. The design separates pacing recommendations from a mandatory Safety Controller, transactional resource allocation, and telecom-provider adapters.
+A runnable Python prototype of a progressive and predictive outbound dialer. It separates pacing decisions from a mandatory safety gate, transactional agent/borrower allocation, and telecom-provider adapters.
 
-## Assignment scope and implemented requirements
+## What is implemented
 
-| Requirement | Implementation |
+| Area | Implementation |
 |---|---|
-| Progressive dialer | Starts no more calls than available agents, queued borrowers, and configured batch size |
-| Predictive pacing | Estimates demand using answer rate, average talk time, ringing calls, connected calls, and target utilization |
-| Mandatory safety gate | Every batch passes through `SafetyController`; provider execution happens only after approval |
-| Agent and call state machines | Explicit domain states and validated provider-event transitions |
-| Concurrency protection | Conditional SQL updates reserve agents and borrowers atomically with the call record |
-| Idempotency and event ordering | Unique call idempotency key; provider event uniqueness; duplicate and stale event handling |
+| Progressive dialing | Limits attempts to available agents, queued borrowers, and the configured batch size |
+| Predictive pacing | Uses answer rate, average talk time, ringing calls, connected calls, and target utilization to estimate demand |
+| Independent safety gate | Every requested batch passes through the Safety Controller before any provider call is initiated |
+| State management | Agent and call lifecycle states with guarded provider-event transitions |
+| Concurrency | Conditional database updates protect agent and borrower reservations |
+| Idempotency | Client batch keys and unique provider event IDs prevent duplicate processing |
 | Provider abstraction | Two mock providers with different latency and failure behaviour |
-| Provider outage handling | In-process circuit breaker blocks new attempts when provider health is open |
-| Worker recovery | Maintenance endpoint releases stale pre-initiation reservations; ambiguous initiated calls require provider reconciliation |
-| Simulation and tests | Deterministic scenario runner, unit tests, provider-event tests, and PostgreSQL concurrency tests |
-| Architecture and decisions | Architecture diagram, scaling notes, and ADRs in `docs/` |
+| Provider failure handling | In-process circuit breaker stops new attempts when a provider is unhealthy |
+| Recovery | Releases stale reservations only when provider initiation has not started |
+| Evaluation | Predictive scenario matrix, automated tests, and a lightweight API load smoke test |
 
 ## Requirements
 
-- Python 3.11+
-- PostgreSQL 14+ for concurrency integration tests (SQLite is sufficient for local development)
+- Python 3.11 or later
+- SQLite for local development
+- PostgreSQL 14 or later for concurrency integration tests
 
 ## Setup
 
+Clone the repository and create a virtual environment:
+
 ```bash
-git clone <repository-url>
+git clone https://github.com/saidattaputta/credresolve-smartdialer.git
 cd credresolve-smartdialer
+
 python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\\Scripts\\activate
+source .venv/bin/activate
+# Windows: .venv\\Scripts\\activate
+
 pip install -r requirements.txt
-cp .env.example .env            # Windows: copy .env.example .env
+cp .env.example .env
+# Windows: copy .env.example .env
 ```
 
-The application loads values from `.env`. SQLite is the default and requires no database setup. To use PostgreSQL, set:
+SQLite is used by default, so no database setup is needed for a local run.
+
+To use PostgreSQL, create a database and set `DATABASE_URL` in `.env`:
 
 ```dotenv
-DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/smartdialer
+DATABASE_URL=postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/smartdialer
 ```
 
-Create the database before starting the application. Then run:
+Start the API:
 
 ```bash
 uvicorn app.main:app --reload
 ```
 
-- API health: http://127.0.0.1:8000/health
-- Swagger UI: http://127.0.0.1:8000/docs
+- Health check: http://127.0.0.1:8000/health
+- Interactive API documentation: http://127.0.0.1:8000/docs
 
-Tables are created automatically for this prototype. A production deployment should use Alembic migrations.
+Database tables are initialized when the application starts. This is suitable for the prototype; a production deployment should use a migration tool such as Alembic.
 
-## Quick API demo
+## Quick API walkthrough
 
-Use Swagger UI or the following sequence:
+You can use the interactive Swagger UI at `/docs`, or follow these steps.
 
-1. Seed a campaign, agents, and borrowers with `POST /api/v1/demo/seed`:
-   ```json
-   {"agents": 5, "borrowers": 20, "campaign_name": "Demo Campaign"}
-   ```
-2. Copy the returned `campaign_id`.
-3. Start progressive dialing:
-   `POST /api/v1/campaigns/{campaign_id}/dial`
-   ```json
-   {"mode": "progressive", "provider": "provider_a", "idempotency_key": "demo-batch-0001"}
-   ```
-4. Start predictive dialing with an answer-rate and talk-time estimate:
-   ```json
-   {
-     "mode": "predictive",
-     "provider": "provider_b",
-     "answer_rate": 0.5,
-     "average_talk_time_seconds": 120,
-     "max_batch": 20
-   }
-   ```
-5. Inspect calls at `GET /api/v1/campaigns/{campaign_id}/calls` and aggregate counts at `GET /api/v1/metrics`.
-6. Send provider lifecycle events to `POST /api/v1/calls/{call_id}/events`:
-   ```json
-   {"event_id": "provider-event-001", "event_type": "RINGING"}
-   ```
-   Valid event types: `RINGING`, `ANSWERED`, `CONNECTED`, `COMPLETED`, `FAILED`, `CANCELLED`. Use a unique event ID per provider event.
-7. Recover reservations abandoned before provider initiation:
-   `POST /api/v1/maintenance/recover-stale-reservations?stale_after_seconds=120`.
+**1. Create demo data**
 
-## Safety and concurrency model
+Send `POST /api/v1/demo/seed`:
 
-1. The pacing engine is advisory. It calculates a requested batch and has no provider reference.
-2. The Safety Controller independently caps the request by available agents and queued borrowers, and returns zero when the provider circuit breaker is unhealthy.
-3. The allocator claims an agent and borrower with conditional updates in one database transaction and persists the call before initiating it.
-4. A provider event can advance only a legal state transition. Duplicate event IDs are ignored, and terminal calls cannot be resurrected by late events.
-5. The prototype is intentionally conservative: every outbound attempt has a reserved agent. It does not over-dial and therefore avoids unhandled answers by construction.
+```json
+{
+  "agents": 5,
+  "borrowers": 20,
+  "campaign_name": "Demo Campaign"
+}
+```
 
-### Crash recovery boundary
+Keep the returned `campaign_id` for the following requests.
 
-The allocator persists `provider_started=false` with the reservation, then commits `provider_started=true` immediately before making the external provider request. Recovery only releases old `RESERVED` calls that are still marked `provider_started=false`. Calls marked true are never blindly retried: a worker may have crashed during or after the provider request, so they require provider lookup/reconciliation to avoid duplicate outbound calls. For client retries, supply the same `idempotency_key` in the dial request; use a new key for a genuinely new batch.
+**2. Start progressive dialing**
+
+Send `POST /api/v1/campaigns/{campaign_id}/dial`:
+
+```json
+{
+  "mode": "progressive",
+  "provider": "provider_a",
+  "idempotency_key": "demo-batch-0001"
+}
+```
+
+**3. Try predictive dialing**
+
+```json
+{
+  "mode": "predictive",
+  "provider": "provider_b",
+  "answer_rate": 0.5,
+  "average_talk_time_seconds": 120,
+  "max_batch": 20
+}
+```
+
+**4. Inspect calls and metrics**
+
+- `GET /api/v1/campaigns/{campaign_id}/calls`
+- `GET /api/v1/metrics`
+
+**5. Send provider lifecycle events**
+
+Send `POST /api/v1/calls/{call_id}/events`:
+
+```json
+{
+  "event_id": "provider-event-001",
+  "event_type": "RINGING"
+}
+```
+
+Supported event types: `RINGING`, `ANSWERED`, `CONNECTED`, `COMPLETED`, `FAILED`, and `CANCELLED`. Use a unique event ID for each provider event. Duplicate IDs and invalid or stale state transitions are ignored.
+
+**6. Recover abandoned pre-initiation reservations**
+
+```text
+POST /api/v1/maintenance/recover-stale-reservations?stale_after_seconds=120
+```
+
+## Design and safety
+
+The pacing engine recommends a batch size; it does not initiate calls or control the safety policy. The Safety Controller independently checks the available agent capacity, queued borrower count, and provider health. Only approved attempts proceed to allocation.
+
+For each attempt, the allocator conditionally claims an available agent and a queued borrower in the database and persists the call record before contacting the provider. Provider events are checked against the call state machine. Duplicate events are recorded once, and late events cannot move terminal calls back into an active state.
+
+This prototype is intentionally conservative: every outbound attempt is backed by a reserved agent. It does not use aggressive over-dialing.
+
+### Idempotency and crash recovery
+
+Pass the same `idempotency_key` when retrying a dial request to avoid creating another batch. Use a new key for a genuinely new batch.
+
+A reservation is first stored with `provider_started=false`. Immediately before the external provider request, the application commits `provider_started=true`. Recovery releases only stale `RESERVED` calls that are still marked `false`.
+
+A call marked `provider_started=true` is not automatically retried. If a worker crashes during or after the provider request, the outcome may be unknown; provider lookup and reconciliation are needed before retrying to avoid duplicate calls.
 
 ## Predictive scenario evaluation
 
-Run the deterministic aggregate scenario matrix:
+Run the deterministic scenario matrix:
 
 ```bash
 python -m app.simulation
 ```
 
-The runner evaluates answer rates of 20%, 50%, and 70% against average talk times of 120s, 90s, and 180s. It reports expected answers per 100 attempts and estimated agent occupancy for each case. These are model estimates, not live telecom measurements. The live API simulation endpoint is a small single-campaign demonstration, not a substitute for this matrix.
+It evaluates answer rates of 20%, 50%, and 70% against average talk times of 120, 90, and 180 seconds. The output estimates expected answers per 100 attempts and agent occupancy.
 
-## Tests
+These figures are model estimates, not live telecom measurements. The API simulation endpoint is a small demonstration and is separate from the scenario matrix.
 
-Run the local suite:
+## Tests and load smoke test
+
+Run the local test suite:
 
 ```bash
 pytest -q
 ```
 
-The PostgreSQL concurrency and provider-event integration tests are skipped unless `DATABASE_URL` points to a dedicated database named `credresolve_test`. To run them:
+The PostgreSQL concurrency tests require a dedicated test database named `credresolve_test`. Configure `DATABASE_URL` to point to that database before running them:
 
 ```bash
 createdb credresolve_test
-DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/credresolve_test pytest -q
+export DATABASE_URL='postgresql+psycopg://postgres:YOUR_PASSWORD@localhost:5432/credresolve_test'
+pytest -q tests/test_postgres_concurrency.py
 ```
 
-Do not point destructive integration tests at a production database. They create and remove isolated test records and temporarily pause other available agents.
+Do not use a production database for tests. The integration tests create and modify test records.
 
-A lightweight API load smoke test can be run with the server active:
+For a lightweight HTTP smoke test, start the application in one terminal and run this in another:
 
 ```bash
 python scripts/load_test.py --requests 100 --concurrency 10
 ```
 
-It measures local health-endpoint throughput and latency. It is a smoke test, not a benchmark of database allocation or provider capacity.
+The script measures throughput and latency for the health endpoint. It is not a database, allocation, or telecom-provider load benchmark.
 
-## Architecture
+## Project documentation
 
-See:
-- `docs/architecture.md` — component boundaries, state transitions, and scaling from 100 to 10,000 agents
-- `docs/architecture.mmd` — standalone Mermaid diagram
-- `docs/adr.md` — key architecture decisions
+- `docs/architecture.md` — component boundaries, state transitions, and scaling considerations
+- `docs/architecture.mmd` — Mermaid architecture diagram
+- `docs/adr.md` — architecture decision records
 - `docs/simulation/scenarios.md` — scenario assumptions and interpretation
 
-## Limitations and production work
+## Limitations
 
-- Mock providers do not place real calls.
-- Authentication, authorization, borrower PII encryption, consent/DND checks, regulatory policy enforcement, and production observability are not implemented. Do not use this prototype with real borrower data or live collections.
-- Circuit-breaker state is in-process; multi-worker production deployments need shared health state.
-- Provider timeout after request transmission is ambiguous and requires provider idempotency plus reconciliation.
-- The predictive engine is deliberately bounded by currently available agents. It demonstrates workload-aware pacing inputs, not an aggressive over-dial strategy.
-- Production PostgreSQL workers should use indexed queue claims and `SELECT ... FOR UPDATE SKIP LOCKED`, while retaining conditional updates as the final correctness guard.
+- Both telecom providers are mocks; no real calls are placed.
+- Authentication, authorization, borrower PII encryption, consent/DND checks, and production regulatory controls are not implemented. Do not use this prototype with real borrower data or live collections.
+- Provider circuit-breaker state is held in process memory. Multi-worker production deployments need shared state.
+- A timeout after a provider request has been transmitted can have an ambiguous outcome and requires provider-side idempotency and reconciliation.
+- Predictive pacing remains bounded by available agent slots; it demonstrates workload-aware pacing inputs rather than aggressive over-dialing.
+- Production PostgreSQL deployments should use indexed queue claims and consider `SELECT ... FOR UPDATE SKIP LOCKED`, while retaining conditional updates as a correctness guard.
