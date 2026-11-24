@@ -16,7 +16,7 @@ from app.schemas import (
     DialRequest,
     EventRequest,
 )
-from app.services import Dialer, process_provider_event
+from app.services import Dialer, process_provider_event, recover_stale_reservations
 
 
 @asynccontextmanager
@@ -195,6 +195,17 @@ def provider_event(
         payload.event_id,
         payload.event_type,
     )
+
+
+
+@app.post("/api/v1/maintenance/recover-stale-reservations", tags=["maintenance"])
+def recover_reservations(
+    stale_after_seconds: int = 120,
+    db: Session = Depends(get_db),
+):
+    if stale_after_seconds < 1:
+        raise HTTPException(422, "stale_after_seconds must be positive")
+    return recover_stale_reservations(db, stale_after_seconds)
 
 
 @app.get("/api/v1/metrics", tags=["monitoring"])
