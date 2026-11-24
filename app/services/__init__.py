@@ -14,15 +14,24 @@ class PacingEngine:
         if mode == "progressive":
             n = min(available_agents, queued_borrowers, max_batch)
             return n, "Progressive: one outbound attempt per currently available agent."
-        # Conservative predictive policy: reserve a real agent for every attempt.
-        # Estimate expected near-term demand, then cap by real capacity.
+        # Conservative predictive policy: estimate attempts needed to fill a
+        # target share of current agent capacity, then enforce the hard slot cap.
+        # Longer calls lower the target to reduce queue pressure; ringing and
+        # connected calls are included as already-occupied workload.
+        observed_workload = connected_calls + ringing_calls
+        estimated_pool = max(available_agents + observed_workload, 1)
+        talk_time_factor = min(max(avg_talk_seconds, 30), 600) / 6000
+        target_utilization = max(0.75, min(0.90, 0.90 - talk_time_factor))
+        target_active = math.ceil(estimated_pool * target_utilization)
+        target_new_answers = max(0, target_active - observed_workload)
         expected_answers_per_attempt = max(answer_rate, 0.01)
-        demand_adjusted = math.ceil(max(0, available_agents - connected_calls) / expected_answers_per_attempt)
+        demand_adjusted = math.ceil(target_new_answers / expected_answers_per_attempt)
         n = min(available_agents, queued_borrowers, max_batch, demand_adjusted)
         explanation = (
-            f"Predictive recommendation uses answer_rate={answer_rate:.2f}, "
-            f"avg_talk={avg_talk_seconds}s, ringing={ringing_calls}, connected={connected_calls}. "
-            "Conservative safety policy caps attempts at available agent slots."
+            f"Predictive estimate: answer_rate={answer_rate:.2f}, "
+            f"avg_talk={avg_talk_seconds}s, ringing={ringing_calls}, "
+            f"connected={connected_calls}, target_utilization={target_utilization:.0%}. "
+            "The Safety Controller still caps every attempt at a reserved agent slot."
         )
         return n, explanation
 
