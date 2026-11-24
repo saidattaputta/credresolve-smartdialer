@@ -1,0 +1,23 @@
+from enum import StrEnum
+
+
+class AgentState(StrEnum):
+    OFFLINE = "OFFLINE"
+    AVAILABLE = "AVAILABLE"
+    RESERVED = "RESERVED"
+    DIALING = "DIALING"
+    CONNECTED = "CONNECTED"
+    WRAP_UP = "WRAP_UP"
+    PAUSED = "PAUSED"
+
+
+class CallState(StrEnum):
+    QUEUED = "QUEUED"
+    RESERVED = "RESERVED"
+    INITIATED = "INITIATED"
+    RINGING = "RINGING"
+    ANSWERED = "ANSWERED"
+    CONNECTED = "CONNECTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"

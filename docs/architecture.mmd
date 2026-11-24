@@ -1,0 +1,12 @@
+flowchart TD
+  Campaign --> Pacing
+  Progressive --> Safety
+  Pacing --> Safety
+  Safety --> Allocator
+  Allocator --> Database[(PostgreSQL)]
+  Allocator --> ProviderInterface
+  ProviderInterface --> ProviderA
+  ProviderInterface --> ProviderB
+  ProviderA --> EventHandler
+  ProviderB --> EventHandler
+  EventHandler --> Database
