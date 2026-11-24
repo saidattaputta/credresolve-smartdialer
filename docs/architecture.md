@@ -19,8 +19,10 @@ flowchart TD
 ## Trust boundaries
 The pacing engine is advisory only. It cannot import or invoke provider adapters.
 The Safety Controller is the only component allowed to approve a batch. The allocator
-uses database state to claim resources. Provider adapters are isolated behind a common
-interface.
+uses conditional database updates to claim resources and persists a client-supplied batch
+idempotency key. Provider adapters are isolated behind a common interface. A persisted
+`provider_started` flag marks the boundary before the external side effect, allowing safe
+recovery of reservations that never reached provider initiation.
 
 ## State transitions
 Agent: OFFLINE -> AVAILABLE -> RESERVED -> DIALING -> CONNECTED -> WRAP_UP -> AVAILABLE.
@@ -36,3 +38,9 @@ circuit-breaker state. At 10,000 agents, partition campaigns/queues, use durable
 transport, horizontally scaled workers, database sharding or carefully partitioned
 ownership, and provider rate limits. Measure lock wait time and event lag before splitting
 services.
+
+
+## Failure recovery boundary
+The maintenance recovery endpoint only releases stale RESERVED calls with
+`provider_started=false`. Once the flag is committed, the provider request may have
+been sent; those calls are left for provider reconciliation rather than blindly retried.
