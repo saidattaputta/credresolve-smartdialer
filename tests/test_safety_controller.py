@@ -23,3 +23,8 @@ def test_rejects_all_calls_when_provider_unhealthy():
 def test_negative_counts_are_rejected():
     with pytest.raises(ValueError):
         SafetyController.approve(-1, 10)
+
+def test_never_approves_more_calls_than_queued_borrowers():
+    decision = SafetyController.approve(10, 8, 3)
+    assert decision.approved_count == 3
+    assert decision.reason == "capped_by_borrower_capacity"

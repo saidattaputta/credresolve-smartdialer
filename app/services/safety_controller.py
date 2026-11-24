@@ -9,22 +9,44 @@ class DialingDecision:
 
 
 class SafetyController:
-    """Mandatory gate between pacing decisions and call initiation.
-
-    This first version contains the pure capacity rule. The next milestone will
-    move the authoritative reservation into a PostgreSQL transaction so concurrent
-    workers cannot over-allocate agents.
-    """
+    """Final capacity and provider-health gate before call allocation."""
 
     @staticmethod
-    def approve(requested_count: int, available_agent_count: int,
-                provider_healthy: bool = True) -> DialingDecision:
-        if requested_count < 0 or available_agent_count < 0:
+    def approve(
+        requested_count: int,
+        available_agent_count: int,
+        queued_borrower_count: int | None = None,
+        provider_healthy: bool = True,
+    ) -> DialingDecision:
+
+        counts = [requested_count, available_agent_count]
+        if queued_borrower_count is not None:
+            counts.append(queued_borrower_count)
+
+        if any(count < 0 for count in counts):
             raise ValueError("Counts cannot be negative")
 
         if not provider_healthy:
-            return DialingDecision(0, requested_count, "provider_unhealthy")
+            return DialingDecision(
+                0, requested_count, "provider_unhealthy"
+            )
 
-        approved = min(requested_count, available_agent_count)
-        reason = "approved" if approved == requested_count else "capped_by_agent_capacity"
+        capacities = [requested_count, available_agent_count]
+
+        if queued_borrower_count is not None:
+            capacities.append(queued_borrower_count)
+
+        approved = min(capacities)
+
+        if approved == requested_count:
+            reason = "approved"
+        elif (
+            queued_borrower_count is not None
+            and queued_borrower_count < available_agent_count
+            and queued_borrower_count < requested_count
+        ):
+            reason = "capped_by_borrower_capacity"
+        else:
+            reason = "capped_by_agent_capacity"
+
         return DialingDecision(approved, requested_count, reason)

@@ -15,8 +15,11 @@ def test_predictive_never_recommends_more_than_agents():
     assert "Conservative safety policy" in explanation
 
 def test_safety_controller_hard_caps():
-    assert SafetyController().approve(20, 3, 100, True) == (3, "CAPPED_BY_CAPACITY")
-    assert SafetyController().approve(5, 10, 10, False) == (0, "PROVIDER_UNHEALTHY")
+    decision = SafetyController().approve(20, 3, 100, True)
+
+    assert decision.approved_count == 3
+    assert decision.requested_count == 20
+    assert decision.reason == "capped_by_agent_capacity"
 
 def test_call_state_machine_has_no_terminal_resurrection():
     assert "RINGING" not in ALLOWED_CALL_TRANSITIONS["COMPLETED"]

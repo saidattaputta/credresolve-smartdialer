@@ -28,3 +28,8 @@ ALLOWED_CALL_TRANSITIONS = {
     "ANSWERED": {"CONNECTED", "COMPLETED", "FAILED"},
     "CONNECTED": {"COMPLETED", "FAILED"},
 }
+ALLOWED_CALL_TRANSITIONS.update({
+    CallState.COMPLETED: set(),
+    CallState.FAILED: set(),
+    CallState.CANCELLED: set(),
+})

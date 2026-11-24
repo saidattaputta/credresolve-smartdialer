@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.models import Agent, Borrower, Call, ProviderEvent
 from app.domain import TERMINAL_CALL_STATES, ALLOWED_CALL_TRANSITIONS
 from app.providers import PROVIDERS, HEALTH
+from app.services.safety_controller import SafetyController
 
 class PacingEngine:
     """Pure decision logic: returns a recommendation and never calls providers."""
@@ -25,46 +26,93 @@ class PacingEngine:
         )
         return n, explanation
 
-class SafetyController:
-    def approve(self, requested: int, available_agents: int, queued_borrowers: int,
-                provider_healthy: bool) -> tuple[int, str]:
-        if not provider_healthy:
-            return 0, "PROVIDER_UNHEALTHY"
-        approved = max(0, min(requested, available_agents, queued_borrowers))
-        reason = "APPROVED" if approved == requested else "CAPPED_BY_CAPACITY"
-        return approved, reason
-
 class Allocator:
-    def reserve_one(self, db: Session, campaign_id: int, provider_name: str, key: str):
-        # Conditional updates are the correctness guard across competing workers.
-        agent = db.scalar(select(Agent).where(Agent.state == "AVAILABLE").order_by(Agent.id).limit(1))
-        borrower = db.scalar(select(Borrower).where(
-            Borrower.campaign_id == campaign_id, Borrower.state == "QUEUED"
-        ).order_by(Borrower.id).limit(1))
-        if not agent or not borrower:
-            return None
-        agent_claim = db.execute(
-            update(Agent).where(Agent.id == agent.id, Agent.state == "AVAILABLE")
-            .values(state="RESERVED")
-        )
-        if agent_claim.rowcount != 1:
-            db.rollback()
-            return None
-        borrower_claim = db.execute(
-            update(Borrower).where(Borrower.id == borrower.id, Borrower.state == "QUEUED")
-            .values(state="RESERVED", attempts=Borrower.attempts + 1)
-        )
-        if borrower_claim.rowcount != 1:
-            db.rollback()
-            return None
-        call = Call(campaign_id=campaign_id, agent_id=agent.id, borrower_id=borrower.id,
-                    provider=provider_name, state="RESERVED", idempotency_key=key)
-        db.add(call)
-        db.flush()
-        agent.current_call_id = call.id
-        db.commit()
-        db.refresh(call)
-        return call
+    def reserve_one(
+        self,
+        db: Session,
+        campaign_id: int,
+        provider_name: str,
+        key: str,
+        max_attempts: int = 10,
+    ):
+        for attempt in range(max_attempts):
+
+            # Find an available agent.
+            agent = db.scalar(
+                select(Agent)
+                .where(Agent.state == "AVAILABLE")
+                .order_by(Agent.id)
+                .limit(1)
+            )
+
+            # Find a queued borrower for this campaign.
+            borrower = db.scalar(
+                select(Borrower)
+                .where(
+                    Borrower.campaign_id == campaign_id,
+                    Borrower.state == "QUEUED",
+                )
+                .order_by(Borrower.id)
+                .limit(1)
+            )
+
+            if not agent or not borrower:
+                return None
+
+            # Atomically claim the agent.
+            agent_claim = db.execute(
+                update(Agent)
+                .where(
+                    Agent.id == agent.id,
+                    Agent.state == "AVAILABLE",
+                )
+                .values(state="RESERVED")
+            )
+
+            if agent_claim.rowcount != 1:
+                db.rollback()
+                continue
+
+            # Atomically claim the borrower.
+            borrower_claim = db.execute(
+                update(Borrower)
+                .where(
+                    Borrower.id == borrower.id,
+                    Borrower.state == "QUEUED",
+                )
+                .values(
+                    state="RESERVED",
+                    attempts=Borrower.attempts + 1,
+                )
+            )
+
+            if borrower_claim.rowcount != 1:
+                db.rollback()
+                continue
+
+            # Both resources are successfully reserved.
+            call = Call(
+                campaign_id=campaign_id,
+                agent_id=agent.id,
+                borrower_id=borrower.id,
+                provider=provider_name,
+                state="RESERVED",
+                idempotency_key=key,
+            )
+
+            db.add(call)
+            db.flush()
+
+            agent.current_call_id = call.id
+
+            db.commit()
+            db.refresh(call)
+
+            return call
+
+        # No successful reservation within the retry limit.
+        return None
+
 
 class Dialer:
     def __init__(self):
@@ -82,9 +130,14 @@ class Dialer:
         requested, explanation = self.pacing.recommend(
             mode, available, queued, ringing, connected, answer_rate, avg_talk, max_batch
         )
-        approved, reason = self.safety.approve(
-            requested, available, queued, HEALTH[provider_name].healthy()
+        decision = self.safety.approve(
+            requested,
+            available,
+            queued,
+            provider_healthy=HEALTH[provider_name].healthy(),
         )
+        approved = decision.approved_count
+        reason = decision.reason
         created = []
         provider = PROVIDERS[provider_name]
         for i in range(approved):
