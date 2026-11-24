@@ -22,6 +22,7 @@ class DialRequest(BaseModel):
     answer_rate: float = Field(default=0.5, ge=0.01, le=0.99)
     average_talk_time_seconds: int = Field(default=120, ge=10, le=3600)
     max_batch: int = Field(default=50, ge=1, le=500)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=100)
 
 class EventRequest(BaseModel):
     event_id: str
