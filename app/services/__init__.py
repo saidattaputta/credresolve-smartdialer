@@ -1,6 +1,8 @@
 import math
 from uuid import uuid4
+from uuid import uuid4
 from sqlalchemy import select, update, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from app.models import Agent, Borrower, Call, ProviderEvent
@@ -46,6 +48,10 @@ class Allocator:
         key: str,
         max_attempts: int = 10,
     ):
+        # A repeated client key must never allocate a second call.
+        if db.scalar(select(Call.id).where(Call.idempotency_key == key)) is not None:
+            return None
+
         # A repeated client key must never allocate a second call.
         if db.scalar(select(Call.id).where(Call.idempotency_key == key)) is not None:
             return None
@@ -180,6 +186,7 @@ class Dialer:
             created.append(call.id)
         return {
             "mode": mode, "requested": requested, "approved": approved,
+            "idempotency_key": batch_key,
             "idempotency_key": batch_key,
             "initiated_call_ids": created, "safety_decision": reason,
             "pacing_explanation": explanation, "provider_healthy": HEALTH[provider_name].healthy()
