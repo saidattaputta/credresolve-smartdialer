@@ -1,5 +1,6 @@
 
 import pytest
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.engine import make_url
@@ -7,7 +8,7 @@ from sqlalchemy.engine import make_url
 from app.config import DATABASE_URL
 from app.db import SessionLocal
 from app.models import Agent, Borrower, Call, Campaign, ProviderEvent
-from app.services import process_provider_event
+from app.services import process_provider_event, recover_stale_reservations
 
 
 # Use only the dedicated PostgreSQL test database.
@@ -197,3 +198,41 @@ def test_unknown_call_id_is_handled_safely():
         )
 
         assert result is None
+
+
+
+def test_recovery_releases_only_stale_pre_provider_reservations(call_records):
+    _, agent_id, borrower_id, call_id = call_records
+    with SessionLocal() as db:
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        db.execute(
+            update(Call)
+            .where(Call.id == call_id)
+            .values(state="RESERVED", provider_started=False, updated_at=old_time)
+        )
+        db.commit()
+
+        result = recover_stale_reservations(db, stale_after_seconds=60)
+        assert result["recovered"] == 1
+        assert db.get(Call, call_id).state == "FAILED"
+        assert db.get(Agent, agent_id).state == "AVAILABLE"
+        assert db.get(Agent, agent_id).current_call_id is None
+        assert db.get(Borrower, borrower_id).state == "QUEUED"
+
+
+def test_recovery_does_not_retry_after_provider_request_started(call_records):
+    _, agent_id, borrower_id, call_id = call_records
+    with SessionLocal() as db:
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=10)
+        db.execute(
+            update(Call)
+            .where(Call.id == call_id)
+            .values(state="RESERVED", provider_started=True, updated_at=old_time)
+        )
+        db.commit()
+
+        result = recover_stale_reservations(db, stale_after_seconds=60)
+        assert result["recovered"] == 0
+        assert db.get(Call, call_id).state == "RESERVED"
+        assert db.get(Agent, agent_id).state == "DIALING"
+        assert db.get(Borrower, borrower_id).state == "RESERVED"
