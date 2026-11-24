@@ -23,3 +23,19 @@ def test_safety_controller_hard_caps():
 
 def test_call_state_machine_has_no_terminal_resurrection():
     assert "RINGING" not in ALLOWED_CALL_TRANSITIONS["COMPLETED"]
+
+
+
+def test_predictive_estimate_uses_answer_rate_and_talk_time():
+    engine = PacingEngine()
+    low_answer_rate, _ = engine.recommend(
+        "predictive", 20, 100, 0, 0, 0.5, 90, 50
+    )
+    high_answer_rate, _ = engine.recommend(
+        "predictive", 20, 100, 0, 0, 0.99, 90, 50
+    )
+    long_talk, _ = engine.recommend(
+        "predictive", 20, 100, 0, 0, 0.99, 600, 50
+    )
+    assert high_answer_rate < low_answer_rate
+    assert long_talk < high_answer_rate
