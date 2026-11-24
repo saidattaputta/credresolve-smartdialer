@@ -30,7 +30,8 @@ class PacingEngine:
         demand_adjusted = math.ceil(target_new_answers / expected_answers_per_attempt)
         n = min(available_agents, queued_borrowers, max_batch, demand_adjusted)
         explanation = (
-            f"Predictive estimate: answer_rate={answer_rate:.2f}, "
+            "Conservative safety policy. Predictive estimate: "
+            f"answer_rate={answer_rate:.2f}, "
             f"avg_talk={avg_talk_seconds}s, ringing={ringing_calls}, "
             f"connected={connected_calls}, target_utilization={target_utilization:.0%}. "
             "The Safety Controller still caps every attempt at a reserved agent slot."
