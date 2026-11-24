@@ -63,7 +63,7 @@ Use Swagger UI or the following sequence:
 3. Start progressive dialing:
    `POST /api/v1/campaigns/{campaign_id}/dial`
    ```json
-   {"mode": "progressive", "provider": "provider_a"}
+   {"mode": "progressive", "provider": "provider_a", "idempotency_key": "demo-batch-0001"}
    ```
 4. Start predictive dialing with an answer-rate and talk-time estimate:
    ```json
@@ -94,7 +94,7 @@ Use Swagger UI or the following sequence:
 
 ### Crash recovery boundary
 
-The recovery endpoint only resets old calls still in `RESERVED`, which indicates the worker did not progress to provider initiation. Calls already in `INITIATED` are deliberately not retried automatically: a worker may have crashed after the provider accepted the request but before the database was updated. Such calls require provider lookup/reconciliation to avoid duplicate outbound calls.
+The allocator persists `provider_started=false` with the reservation, then commits `provider_started=true` immediately before making the external provider request. Recovery only releases old `RESERVED` calls that are still marked `provider_started=false`. Calls marked true are never blindly retried: a worker may have crashed during or after the provider request, so they require provider lookup/reconciliation to avoid duplicate outbound calls. For client retries, supply the same `idempotency_key` in the dial request; use a new key for a genuinely new batch.
 
 ## Predictive scenario evaluation
 
