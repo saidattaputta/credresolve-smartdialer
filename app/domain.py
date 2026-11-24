@@ -1,5 +1,6 @@
 from enum import StrEnum
 
+
 class AgentState(StrEnum):
     OFFLINE = "OFFLINE"
     AVAILABLE = "AVAILABLE"
@@ -8,6 +9,7 @@ class AgentState(StrEnum):
     CONNECTED = "CONNECTED"
     WRAP_UP = "WRAP_UP"
     PAUSED = "PAUSED"
+
 
 class CallState(StrEnum):
     QUEUED = "QUEUED"
@@ -20,7 +22,13 @@ class CallState(StrEnum):
     FAILED = "FAILED"
     CANCELLED = "CANCELLED"
 
-TERMINAL_CALL_STATES = {CallState.COMPLETED.value, CallState.FAILED.value, CallState.CANCELLED.value}
+
+TERMINAL_CALL_STATES = {
+    CallState.COMPLETED.value,
+    CallState.FAILED.value,
+    CallState.CANCELLED.value,
+}
+
 ALLOWED_CALL_TRANSITIONS = {
     "RESERVED": {"INITIATED", "FAILED", "CANCELLED"},
     "INITIATED": {"RINGING", "ANSWERED", "CONNECTED", "FAILED", "CANCELLED"},
