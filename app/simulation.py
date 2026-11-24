@@ -9,8 +9,8 @@ AGENT_COUNT = 20
 
 def evaluate(answer_rate: float, average_talk_seconds: int) -> dict:
     expected_answers = ATTEMPTS * answer_rate
-    # Approximate concurrent answered workload for a 60-second observation window.
-    occupancy = min(1.0, expected_answers * average_talk_seconds / (AGENT_COUNT * 60))
+    # Approximate concurrent answered workload for a 300-second observation window.
+    occupancy = min(1.0, expected_answers * average_talk_seconds / (AGENT_COUNT * 300))
     return {
         "answer_rate": answer_rate,
         "average_talk_seconds": average_talk_seconds,
