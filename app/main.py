@@ -1,30 +1,32 @@
-
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from app.config import APP_NAME
 from app.db import get_db, init_db
-from app.models import Agent, Borrower, Campaign, Call
+from app.models import Agent, Borrower, Call, Campaign
 from app.schemas import (
-    SeedRequest,
-    CampaignCreate,
     AgentCreate,
     BorrowerCreate,
+    CampaignCreate,
     DialRequest,
     EventRequest,
+    SeedRequest,
 )
-from app.services import Dialer, process_provider_event, recover_stale_reservations
+from app.services import (
+    Dialer,
+    process_provider_event,
+    recover_stale_reservations,
+)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize database tables when the application starts.
+    """Initialize database tables when the application starts."""
     init_db()
     yield
-    # Add shutdown cleanup here if required in the future.
 
 
 app = FastAPI(
@@ -51,20 +53,16 @@ def seed(payload: SeedRequest, db: Session = Depends(get_db)):
     db.add(campaign)
     db.flush()
 
-    db.add_all([
-        Agent(name=f"Agent {i + 1}")
-        for i in range(payload.agents)
-    ])
-
-    db.add_all([
+    agents = [Agent(name=f"Agent {index + 1}") for index in range(payload.agents)]
+    borrowers = [
         Borrower(
             campaign_id=campaign.id,
-            name=f"Borrower {i + 1}",
-            phone=f"+9100000{i:04d}",
+            name=f"Borrower {index + 1}",
+            phone=f"+9100000{index:04d}",
         )
-        for i in range(payload.borrowers)
-    ])
-
+        for index in range(payload.borrowers)
+    ]
+    db.add_all([*agents, *borrowers])
     db.commit()
 
     return {
@@ -95,17 +93,10 @@ def create_agent(payload: AgentCreate, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(agent)
 
-    return {
-        "id": agent.id,
-        "name": agent.name,
-        "state": agent.state,
-    }
+    return {"id": agent.id, "name": agent.name, "state": agent.state}
 
 
-@app.post(
-    "/api/v1/campaigns/{campaign_id}/borrowers",
-    tags=["campaigns"],
-)
+@app.post("/api/v1/campaigns/{campaign_id}/borrowers", tags=["campaigns"])
 def add_borrower(
     campaign_id: int,
     payload: BorrowerCreate,
@@ -119,7 +110,6 @@ def add_borrower(
         name=payload.name,
         phone=payload.phone,
     )
-
     db.add(borrower)
     db.commit()
     db.refresh(borrower)
@@ -127,10 +117,7 @@ def add_borrower(
     return {"id": borrower.id, "state": borrower.state}
 
 
-@app.post(
-    "/api/v1/campaigns/{campaign_id}/dial",
-    tags=["dialing"],
-)
+@app.post("/api/v1/campaigns/{campaign_id}/dial", tags=["dialing"])
 def dial_campaign(
     campaign_id: int,
     payload: DialRequest,
@@ -151,10 +138,7 @@ def dial_campaign(
     )
 
 
-@app.get(
-    "/api/v1/campaigns/{campaign_id}/calls",
-    tags=["calls"],
-)
+@app.get("/api/v1/campaigns/{campaign_id}/calls", tags=["calls"])
 def list_calls(campaign_id: int, db: Session = Depends(get_db)):
     calls = db.scalars(
         select(Call)
@@ -175,17 +159,13 @@ def list_calls(campaign_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@app.post(
-    "/api/v1/calls/{call_id}/events",
-    tags=["provider events"],
-)
+@app.post("/api/v1/calls/{call_id}/events", tags=["provider events"])
 def provider_event(
     call_id: int,
     payload: EventRequest,
     db: Session = Depends(get_db),
 ):
     call = db.get(Call, call_id)
-
     if not call:
         raise HTTPException(404, "Call not found")
 
@@ -198,8 +178,10 @@ def provider_event(
     )
 
 
-
-@app.post("/api/v1/maintenance/recover-stale-reservations", tags=["maintenance"])
+@app.post(
+    "/api/v1/maintenance/recover-stale-reservations",
+    tags=["maintenance"],
+)
 def recover_reservations(
     stale_after_seconds: int = 120,
     db: Session = Depends(get_db),
@@ -212,35 +194,34 @@ def recover_reservations(
 @app.get("/api/v1/metrics", tags=["monitoring"])
 def metrics(db: Session = Depends(get_db)):
     def count(model, field=None, value=None):
-        stmt = select(model)
-
+        statement = select(func.count()).select_from(model)
         if field is not None:
-            stmt = stmt.where(field == value)
+            statement = statement.where(field == value)
+        return db.scalar(statement) or 0
 
-        return len(db.scalars(stmt).all())
+    agent_states = (
+        "AVAILABLE",
+        "RESERVED",
+        "DIALING",
+        "CONNECTED",
+        "OFFLINE",
+        "PAUSED",
+    )
+    call_states = (
+        "INITIATED",
+        "RINGING",
+        "ANSWERED",
+        "CONNECTED",
+        "COMPLETED",
+        "FAILED",
+    )
 
     return {
         "agents": {
-            state: count(Agent, Agent.state, state)
-            for state in [
-                "AVAILABLE",
-                "RESERVED",
-                "DIALING",
-                "CONNECTED",
-                "OFFLINE",
-                "PAUSED",
-            ]
+            state: count(Agent, Agent.state, state) for state in agent_states
         },
         "calls": {
-            state: count(Call, Call.state, state)
-            for state in [
-                "INITIATED",
-                "RINGING",
-                "ANSWERED",
-                "CONNECTED",
-                "COMPLETED",
-                "FAILED",
-            ]
+            state: count(Call, Call.state, state) for state in call_states
         },
         "borrowers_queued": count(Borrower, Borrower.state, "QUEUED"),
     }
@@ -252,20 +233,16 @@ def run_simulation(db: Session = Depends(get_db)):
     db.add(campaign)
     db.flush()
 
-    db.add_all([
-        Agent(name=f"Sim Agent {i}")
-        for i in range(10)
-    ])
-
-    db.add_all([
+    agents = [Agent(name=f"Sim Agent {index}") for index in range(10)]
+    borrowers = [
         Borrower(
             campaign_id=campaign.id,
-            name=f"Sim Borrower {i}",
-            phone=f"+919999{i:05d}",
+            name=f"Sim Borrower {index}",
+            phone=f"+919999{index:05d}",
         )
-        for i in range(100)
-    ])
-
+        for index in range(100)
+    ]
+    db.add_all([*agents, *borrowers])
     db.commit()
 
     result = dialer.dial(
