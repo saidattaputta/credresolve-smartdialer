@@ -199,3 +199,45 @@ def process_provider_event(db: Session, call_id: int, provider: str, event_id: s
             agent.state = "AVAILABLE"
     db.commit()
     return {"accepted": True, "duplicate": False, "state": call.state}
+
+
+
+def recover_stale_reservations(db: Session, stale_after_seconds: int = 120) -> dict:
+    """Release reservations left by a worker that died before provider initiation.
+
+    Only RESERVED calls are automatically recovered. INITIATED calls are ambiguous
+    after a crash and must be reconciled with the provider before retrying.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=stale_after_seconds)
+    stale_calls = db.scalars(
+        select(Call).where(Call.state == "RESERVED", Call.updated_at < cutoff)
+    ).all()
+    recovered = 0
+    for call in stale_calls:
+        agent = db.get(Agent, call.agent_id)
+        borrower = db.get(Borrower, call.borrower_id)
+        if not agent or not borrower:
+            continue
+        # Conditional state check prevents overwriting a concurrent transition.
+        changed = db.execute(
+            update(Call)
+            .where(Call.id == call.id, Call.state == "RESERVED")
+            .values(state="FAILED")
+        )
+        if changed.rowcount != 1:
+            continue
+        db.execute(
+            update(Agent)
+            .where(Agent.id == agent.id, Agent.current_call_id == call.id)
+            .values(state="AVAILABLE", current_call_id=None)
+        )
+        db.execute(
+            update(Borrower)
+            .where(Borrower.id == borrower.id, Borrower.state == "RESERVED")
+            .values(state="QUEUED")
+        )
+        recovered += 1
+    db.commit()
+    return {"recovered": recovered, "cutoff": cutoff.isoformat()}
