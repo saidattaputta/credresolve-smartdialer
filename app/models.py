@@ -40,6 +40,7 @@ class Call(Base):
     provider_call_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     state: Mapped[str] = mapped_column(String(20), default="RESERVED", index=True)
     idempotency_key: Mapped[str] = mapped_column(String(160), unique=True)
+    provider_started: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
