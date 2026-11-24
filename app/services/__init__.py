@@ -167,7 +167,18 @@ class Dialer:
                 break
             # Persist the boundary before the external side effect. If the worker
             # dies after this commit, recovery will not blindly retry the provider.
-            call.provider_started = True
+            started = db.execute(
+                update(Call)
+                .where(
+                    Call.id == call.id,
+                    Call.state == "RESERVED",
+                    Call.provider_started.is_(False),
+                )
+                .values(provider_started=True)
+            )
+            if started.rowcount != 1:
+                db.rollback()
+                continue
             db.commit()
             result = provider.initiate(call.id, db.get(Borrower, call.borrower_id).phone)
             HEALTH[provider_name].record(result.accepted)
@@ -251,7 +262,12 @@ def recover_stale_reservations(db: Session, stale_after_seconds: int = 120) -> d
         # Conditional state check prevents overwriting a concurrent transition.
         changed = db.execute(
             update(Call)
-            .where(Call.id == call.id, Call.state == "RESERVED")
+            .where(
+                Call.id == call.id,
+                Call.state == "RESERVED",
+                Call.provider_started.is_(False),
+                Call.updated_at < cutoff,
+            )
             .values(state="FAILED")
         )
         if changed.rowcount != 1:
