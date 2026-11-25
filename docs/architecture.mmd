@@ -1,12 +1,15 @@
 flowchart TD
-  Campaign --> Pacing
-  Progressive --> Safety
-  Pacing --> Safety
-  Safety --> Allocator
-  Allocator --> Database[(PostgreSQL)]
-  Allocator --> ProviderInterface
-  ProviderInterface --> ProviderA
-  ProviderInterface --> ProviderB
-  ProviderA --> EventHandler
-  ProviderB --> EventHandler
-  EventHandler --> Database
+    API[FastAPI API] --> Dialer[Dialer orchestration]
+    Dialer --> Pacing[Pacing Engine]
+    Pacing --> Safety[Safety Controller]
+    Safety --> Allocator[Allocator]
+    Allocator <--> DB[(Relational database)]
+    Allocator --> Provider[Provider interface]
+    Provider --> A[Mock Provider A]
+    Provider --> B[Mock Provider B]
+    A --> EventAPI[Provider event API]
+    B --> EventAPI
+    EventAPI --> Handler[Provider event handler]
+    Handler <--> DB
+    API --> Recovery[Stale reservation recovery]
+    Recovery <--> DB
